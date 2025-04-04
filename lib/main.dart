@@ -6,8 +6,86 @@ import 'package:app_usage/app_usage.dart';
 import 'notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_background_service_android/flutter_background_service_android.dart';
+import 'dart:async';
 
-void main() => runApp(ScreenSheriffApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeNotifications();
+  await configureLocalTimeZone();
+  await initializeService(); // Initialize background service
+  runApp(ScreenSheriffApp());
+}
+
+Future<void> initializeService() async {
+  final service = FlutterBackgroundService();
+
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart,
+      autoStart: true,
+      isForegroundMode: false,
+      notificationChannelId: 'screen_sheriff_channel',
+      initialNotificationTitle: 'Screen Sheriff',
+      initialNotificationContent: 'Running in background',
+      foregroundServiceNotificationId: 888,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: onStart,
+      onBackground: onIosBackground,
+    ),
+  );
+}
+
+@pragma('vm:entry-point')
+void onStart(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeNotifications();
+  await configureLocalTimeZone();
+
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+
+  service.on('updateSettings').listen((event) async {
+    if (event != null) {
+      final prefs = await SharedPreferences.getInstance();
+      if (event['temperature'] != null) {
+        prefs.setInt('temperature', event['temperature']);
+      }
+      if (event['language'] != null) {
+        prefs.setInt('language', event['language']);
+      }
+    }
+  });
+
+  // Check every minute if it's time to show the notification
+  Timer.periodic(const Duration(minutes: 1), (timer) async {
+    final prefs = await SharedPreferences.getInstance();
+    final notificationHour = prefs.getInt('notificationHour') ?? 12;
+    final notificationMinute = prefs.getInt('notificationMinute') ?? 0;
+    final tempIndex = prefs.getInt('temperature') ?? 0;
+    final langIndex = prefs.getInt('language') ?? 0;
+
+    final now = DateTime.now();
+
+    // Check if it's time to show the notification
+    if (now.hour == notificationHour && now.minute == notificationMinute) {
+      final temperature = Temperature.values[tempIndex];
+      final language = Language.values[langIndex];
+
+      // Generate and show AI notification
+      await generateAndShowNotification(temperature, language);
+    }
+  });
+}
+
+@pragma('vm:entry-point')
+Future<bool> onIosBackground(ServiceInstance service) async {
+  return true;
+}
 
 enum Temperature { goodCop, badCop }
 
@@ -56,21 +134,26 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
       int minute = prefs.getInt('notificationMinute') ?? TimeOfDay.now().minute;
       _notificationTime = TimeOfDay(hour: hour, minute: minute);
     });
+    _scheduleNotification(); // Schedule notification after loading settings
   }
 
-  // Save settings to SharedPreferences
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('temperature', _temperature.index);
     await prefs.setInt('language', _language.index);
     await prefs.setInt('notificationHour', _notificationTime.hour);
     await prefs.setInt('notificationMinute', _notificationTime.minute);
+
+    // Update the background service with all settings
+    final service = FlutterBackgroundService();
+    service.invoke('updateSettings', {
+      'temperature': _temperature.index,
+      'language': _language.index,
+      'notificationHour': _notificationTime.hour,
+      'notificationMinute': _notificationTime.minute,
+    });
   }
 
-  List<AppUsageInfo> getTopTenApps(List<AppUsageInfo> infos) {
-    infos.sort((a, b) => b.usage.compareTo(a.usage));
-    return infos.take(10).toList();
-  }
 
   Future<void> _generateTestNotification() async {
     setState(() {
@@ -119,6 +202,16 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
     }
   }
 
+  Future<void> _scheduleNotification() async {
+    final service = FlutterBackgroundService();
+    service.invoke('updateSettings', {
+      'temperature': _temperature.index,
+      'language': _language.index,
+      'notificationHour': _notificationTime.hour,
+      'notificationMinute': _notificationTime.minute,
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -155,7 +248,7 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
                 setState(() {
                   _temperature = newValue!;
                 });
-                _saveSettings(); // Save settings when temperature changes
+                _saveSettings();
               },
               items: Temperature.values
                   .map<DropdownMenuItem<Temperature>>((Temperature value) {
@@ -176,7 +269,7 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
                 setState(() {
                   _language = newValue!;
                 });
-                _saveSettings(); // Save settings when language changes
+                _saveSettings();
               },
               items: Language.values
                   .map<DropdownMenuItem<Language>>((Language value) {
