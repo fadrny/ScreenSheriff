@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'utils.dart';
 import 'ai_helper.dart';
 import 'package:app_usage/app_usage.dart';
-import 'notification_service.dart'; // Import the notification service
+import 'notification_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/services.dart';
 
 void main() => runApp(ScreenSheriffApp());
 
@@ -39,8 +41,30 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
   @override
   void initState() {
     super.initState();
+    _loadSettings(); // Load settings when the app starts
     requestNotificationPermissions();
     initializeNotifications();
+  }
+
+  // Load settings from SharedPreferences
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _temperature = Temperature.values[prefs.getInt('temperature') ?? Temperature.goodCop.index];
+      _language = Language.values[prefs.getInt('language') ?? Language.czech.index];
+      int hour = prefs.getInt('notificationHour') ?? TimeOfDay.now().hour;
+      int minute = prefs.getInt('notificationMinute') ?? TimeOfDay.now().minute;
+      _notificationTime = TimeOfDay(hour: hour, minute: minute);
+    });
+  }
+
+  // Save settings to SharedPreferences
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('temperature', _temperature.index);
+    await prefs.setInt('language', _language.index);
+    await prefs.setInt('notificationHour', _notificationTime.hour);
+    await prefs.setInt('notificationMinute', _notificationTime.minute);
   }
 
   List<AppUsageInfo> getTopTenApps(List<AppUsageInfo> infos) {
@@ -91,15 +115,27 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
       setState(() {
         _notificationTime = pickedTime;
       });
+      _saveSettings(); // Save settings when the time is picked
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('👮‍♂️ ScreenSheriff'),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset(
+              'assets/images/scsmall.png', // Make sure the path is correct
+              width: 48,
+              height: 48,
+            ),
+          ],
+        ),
         backgroundColor: Colors.red,
+        centerTitle: true, // This line is no longer needed
       ),
       body: ListView(
         children: [
@@ -119,6 +155,7 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
                 setState(() {
                   _temperature = newValue!;
                 });
+                _saveSettings(); // Save settings when temperature changes
               },
               items: Temperature.values
                   .map<DropdownMenuItem<Temperature>>((Temperature value) {
@@ -139,6 +176,7 @@ class ScreenSheriffAppState extends State<ScreenSheriff> {
                 setState(() {
                   _language = newValue!;
                 });
+                _saveSettings(); // Save settings when language changes
               },
               items: Language.values
                   .map<DropdownMenuItem<Language>>((Language value) {
